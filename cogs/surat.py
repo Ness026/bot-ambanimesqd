@@ -155,7 +155,7 @@ def wrap_text_by_pixel(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Fre
 
 
 def render_letter_bytes(receiver_name: str, salutation: str, content: str, alias: str, date_str: str) -> bytes:
-    """Merender surat perkamen ke format PNG bytes secara hemat RAM."""
+    """Merender surat perkamen ke format PNG bytes secara hemat RAM dan ringan dibuka di HP."""
     with Image.open(TEMPLATE_PATH) as img:
         base = img.convert("RGBA").resize((1000, 1250), Image.Resampling.LANCZOS)
 
@@ -212,12 +212,16 @@ def render_letter_bytes(receiver_name: str, salutation: str, content: str, alias
     draw.text((sign_center_x, 1015), clean_alias, font=font_sign, fill=ink_dark, anchor="ma")
     draw.text((sign_center_x, 1082), f"AMBANIMESQD • {date_str}", font=font_date, fill=ink_soft, anchor="ma")
 
+    # Perkecil sedikit hasil akhir (800x1000) agar file ringan & cepat dimuat di HP
+    final_img = base.resize((800, 1000), Image.Resampling.LANCZOS)
+
     buf = io.BytesIO()
     try:
-        base.save(buf, format="PNG", optimize=True)
+        final_img.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
     finally:
         buf.close()
+        final_img.close()
         base.close()
 
 
@@ -317,6 +321,7 @@ class LetterModal(discord.ui.Modal, title="Kirim Surat Rahasia • AMBANIMESQD")
                 date_str
             )
 
+        # Tanpa set_image("attachment://...") agar gambar selalu mulus dimuat & gampang di-save di HP
         status_log = "Terkirim via DM"
         dm_embed = discord.Embed(
             title="✉️ Sepucuk Surat untukmu",
@@ -327,7 +332,6 @@ class LetterModal(discord.ui.Modal, title="Kirim Surat Rahasia • AMBANIMESQD")
             ),
             color=0xC69C3A
         )
-        dm_embed.set_image(url="attachment://surat_ambanimesqd.png")
         dm_embed.set_footer(text="AMBANIMESQD Postal & Registry")
 
         try:
@@ -389,7 +393,6 @@ class LetterModal(discord.ui.Modal, title="Kirim Surat Rahasia • AMBANIMESQD")
                 log_embed.add_field(name="Status", value=status_log, inline=True)
                 log_embed.add_field(name="Nama Samaran", value=alias_val, inline=False)
                 log_embed.add_field(name="Isi Teks Asli", value=f"```{content_val[:900]}```", inline=False)
-                log_embed.set_image(url="attachment://log_surat.png")
 
                 log_file = discord.File(io.BytesIO(img_bytes), filename="log_surat.png")
                 await log_ch.send(embed=log_embed, file=log_file)
@@ -494,7 +497,6 @@ class SuratCog(commands.Cog):
             return
         if message.channel.id in {LETTER_LOG_CHANNEL_ID, POSTBOX_CHANNEL_ID, SURAT_CHANNEL_ID}:
             return
-        # Cegah balasan ganda jika pesan juga memicu auto-reply intro/kartu di bot.py
         if re.search(r"\b(kartu|card|intro)\b", message.content, re.IGNORECASE):
             return
         if not re.search(r"\b(surat|confess)\b", message.content, re.IGNORECASE):
