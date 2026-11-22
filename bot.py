@@ -1,5 +1,6 @@
 import io
 import os
+import random
 import re
 import sqlite3
 import textwrap
@@ -28,6 +29,16 @@ ANIME_KEYWORDS = [
     "FANTASY", "ROMANCE", "SCI-FI", "SLICE OF LIFE",
     "SUPRANATURAL", "SUPERNATURAL", "MISTERY", "MYSTERY"
 ]
+
+# Pencatat indeks terakhir agar balasan otomatis tidak berulang berturut-turut
+last_reply_index = {"card": -1, "intro": -1}
+
+
+def pick_reply(category: str, options: list[str]) -> str:
+    available = [i for i in range(len(options)) if i != last_reply_index.get(category, -1)]
+    idx = random.choice(available) if available else 0
+    last_reply_index[category] = idx
+    return options[idx]
 
 
 # 2. Deteksi otomatis berbagai variasi penulisan gender
@@ -447,7 +458,7 @@ async def on_member_join(member: discord.Member):
         )
 
 
-# Event: Arahkan otomatis jika ada yang mengetik kata "intro", "kartu", atau "card" di channel mana pun
+# Event: Arahkan otomatis dengan narasi elegan & bervariasi saat mengetik "kartu", "card", atau "intro"
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
@@ -458,17 +469,35 @@ async def on_message(message: discord.Message):
     if message.content.startswith("!"):
         return
 
-    if re.search(r"\b(intro|kartu|card)\b", message.content, re.IGNORECASE):
-        intro_ch = message.guild.get_channel(INTRO_CHANNEL_ID)
-        ktp_ch = message.guild.get_channel(KTP_CHANNEL_ID)
+    has_card_kw = bool(re.search(r"\b(kartu|card)\b", message.content, re.IGNORECASE))
+    has_intro_kw = bool(re.search(r"\bintro\b", message.content, re.IGNORECASE))
 
-        intro_mention = intro_ch.mention if intro_ch else "#intro"
-        ktp_mention = ktp_ch.mention if ktp_ch else "#id-card"
+    if not (has_card_kw or has_intro_kw):
+        return
 
-        await message.reply(
-            f"Silakan isi intro di channel {intro_mention} & cek ID Card pribadi dari hasil intro di channel {ktp_mention}.",
-            mention_author=False
-        )
+    intro_ch = message.guild.get_channel(INTRO_CHANNEL_ID)
+    ktp_ch = message.guild.get_channel(KTP_CHANNEL_ID)
+
+    intro_mention = intro_ch.mention if intro_ch else "#intro"
+    ktp_mention = ktp_ch.mention if ktp_ch else "#id-card"
+
+    if has_card_kw:
+        card_replies = [
+            f"Ingin memiliki Kartu Identitas resmi **AMBANIMESQD**? Lengkapi formulir perkenalanmu di {intro_mention}, dan kartumu akan langsung terbit di {ktp_mention}.",
+            f"Kartu Identitas dicetak secara otomatis setelah registrasi selesai. Silakan menuju {intro_mention} untuk mengisi data diri, lalu cek hasil kartumu di {ktp_mention}.",
+            f"Untuk mendapatkan Kartu Identitas beserta role resmimu, cukup isi formulir singkat di {intro_mention}. Setelahnya, kartumu dapat langsung dilihat di {ktp_mention}."
+        ]
+        reply_text = pick_reply("card", card_replies)
+    else:
+        intro_replies = [
+            f"Bagi anggota yang belum memperkenalkan diri, silakan lengkapi formulir registrasi di {intro_mention}. Kartu Identitas pribadimu akan otomatis diterbitkan di {ktp_mention}.",
+            f"Proses perkenalan resmi **AMBANIMESQD** tersedia di {intro_mention}. Begitu selesai, Kartu Identitas dan role milikmu akan langsung aktif serta tampil di {ktp_mention}.",
+            f"Silakan luangkan waktu sejenak untuk mengisi formulir perkenalan di {intro_mention} agar akses penuh dan Kartu Identitasmu segera terbit di {ktp_mention}."
+        ]
+        reply_text = pick_reply("intro", intro_replies)
+
+    embed = discord.Embed(description=reply_text, color=0xD4AF37)
+    await message.reply(embed=embed, mention_author=False)
 
 
 # Perintah Admin: Memasang panel tombol intro (ketik !setup_intro di channel intro)
