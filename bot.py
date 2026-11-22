@@ -4,6 +4,7 @@ import random
 import re
 import sqlite3
 import textwrap
+import time
 import unicodedata
 from datetime import datetime
 
@@ -21,6 +22,17 @@ KTP_CHANNEL_ID = int(os.getenv("KTP_CHANNEL_ID", "0").strip() or "0")
 MEMBER_ROLE_ID = int(os.getenv("MEMBER_ROLE_ID", "0").strip() or "0")
 MALE_ROLE_ID = int(os.getenv("MALE_ROLE_ID", "0").strip() or "0")
 FEMALE_ROLE_ID = int(os.getenv("FEMALE_ROLE_ID", "0").strip() or "0")
+LETTER_LOG_CHANNEL_ID = int(os.getenv("LETTER_LOG_CHANNEL_ID", "0").strip() or "0")
+POSTBOX_CHANNEL_ID = int(os.getenv("POSTBOX_CHANNEL_ID", "0").strip() or "0")
+SURAT_CHANNEL_ID = int(os.getenv("SURAT_CHANNEL_ID", "0").strip() or "0")
+
+# Channel yang dilewati oleh auto-reply sapaan santai agar tetap bersih
+CASUAL_IGNORED_CHANNELS = {
+    ch_id for ch_id in (
+        INTRO_CHANNEL_ID, KTP_CHANNEL_ID,
+        LETTER_LOG_CHANNEL_ID, POSTBOX_CHANNEL_ID, SURAT_CHANNEL_ID
+    ) if ch_id
+}
 
 # Kata kunci pencocokan role server AMBANIMESQD
 KARTU_KEYWORDS = ["KING", "QUEEN", "JACK", "SPADE", "DIAMOND", "HEART", "CLUB"]
@@ -31,7 +43,20 @@ ANIME_KEYWORDS = [
 ]
 
 # Pencatat indeks terakhir agar balasan otomatis tidak berulang berturut-turut
-last_reply_index = {"card": -1, "intro": -1}
+last_reply_index = {
+    "card": -1,
+    "intro": -1,
+    "sapa": -1,
+    "pagi": -1,
+    "siang": -1,
+    "sore": -1,
+    "malam": -1,
+    "libur": -1
+}
+
+# Jeda ringan auto-reply sapaan santai per (user_id, kategori) agar tidak spam
+CHAT_REPLY_COOLDOWN = 60  # detik
+chat_reply_cooldowns: dict[tuple[int, str], float] = {}
 
 
 def pick_reply(category: str, options: list[str]) -> str:
@@ -428,15 +453,15 @@ class IntroButtonView(discord.ui.View):
         await interaction.response.send_modal(IntroModal())
 
 
-# 10. Inisialisasi Bot (Status Activity Permanen + Load Cog Surat)
+# 10. Inisialisasi Bot (Status Activity Polos Permanen + Load Cog Surat)
 class AmbanimesqdBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True
 
-        # Status activity permanen (tidak akan hilang / don't clear selama bot online)
-        activity = discord.CustomActivity(name="🪪 /ktp • ✉️ /surat | AMBANIMESQD")
+        # Status activity permanen tanpa emoji (don't clear selama bot online)
+        activity = discord.CustomActivity(name="•/ktp •/surat •AMBANIMESQD")
 
         super().__init__(
             command_prefix="!",
@@ -469,7 +494,7 @@ async def on_member_join(member: discord.Member):
         )
 
 
-# Event: Arahkan otomatis dengan narasi elegan & bervariasi saat mengetik "kartu", "card", atau "intro"
+# Event: Auto-reply fitur intro/kartu (Embed) + sapaan ramah & waktu/libur (teks reply biasa)
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
@@ -480,35 +505,110 @@ async def on_message(message: discord.Message):
     if message.content.startswith("!"):
         return
 
-    has_card_kw = bool(re.search(r"\b(kartu|card)\b", message.content, re.IGNORECASE))
-    has_intro_kw = bool(re.search(r"\bintro\b", message.content, re.IGNORECASE))
+    content = message.content
 
-    if not (has_card_kw or has_intro_kw):
+    # --- A. Auto-reply Embed untuk "kartu", "card", atau "intro" ---
+    has_card_kw = bool(re.search(r"\b(kartu|card)\b", content, re.IGNORECASE))
+    has_intro_kw = bool(re.search(r"\bintro\b", content, re.IGNORECASE))
+
+    if has_card_kw or has_intro_kw:
+        intro_ch = message.guild.get_channel(INTRO_CHANNEL_ID)
+        ktp_ch = message.guild.get_channel(KTP_CHANNEL_ID)
+
+        intro_mention = intro_ch.mention if intro_ch else "#intro"
+        ktp_mention = ktp_ch.mention if ktp_ch else "#id-card"
+
+        if has_card_kw:
+            card_replies = [
+                f"Ingin memiliki Kartu Identitas resmi **AMBANIMESQD**? Lengkapi formulir perkenalanmu di {intro_mention}, dan kartumu akan langsung terbit di {ktp_mention}.",
+                f"Kartu Identitas dicetak secara otomatis setelah registrasi selesai. Silakan menuju {intro_mention} untuk mengisi data diri, lalu cek hasil kartumu di {ktp_mention}.",
+                f"Untuk mendapatkan Kartu Identitas beserta role resmimu, cukup isi formulir singkat di {intro_mention}. Setelahnya, kartumu dapat langsung dilihat di {ktp_mention}."
+            ]
+            reply_text = pick_reply("card", card_replies)
+        else:
+            intro_replies = [
+                f"Bagi anggota yang belum memperkenalkan diri, silakan lengkapi formulir registrasi di {intro_mention}. Kartu Identitas pribadimu akan otomatis diterbitkan di {ktp_mention}.",
+                f"Proses perkenalan resmi **AMBANIMESQD** tersedia di {intro_mention}. Begitu selesai, Kartu Identitas dan role milikmu akan langsung aktif serta tampil di {ktp_mention}.",
+                f"Silakan luangkan waktu sejenak untuk mengisi formulir perkenalan di {intro_mention} agar akses penuh dan Kartu Identitasmu segera terbit di {ktp_mention}."
+            ]
+            reply_text = pick_reply("intro", intro_replies)
+
+        embed = discord.Embed(description=reply_text, color=0xD4AF37)
+        await message.reply(embed=embed, mention_author=False)
         return
 
-    intro_ch = message.guild.get_channel(INTRO_CHANNEL_ID)
-    ktp_ch = message.guild.get_channel(KTP_CHANNEL_ID)
+    # --- B. Auto-reply Teks Biasa (Berlaku untuk semua role: member, mod, admin, owner) ---
+    if message.channel.id in CASUAL_IGNORED_CHANNELS:
+        return
+    # Cegah balasan ganda jika pesan juga memicu auto-reply surat/confess di cogs/surat.py
+    if re.search(r"\b(surat|confess)\b", content, re.IGNORECASE):
+        return
 
-    intro_mention = intro_ch.mention if intro_ch else "#intro"
-    ktp_mention = ktp_ch.mention if ktp_ch else "#id-card"
+    mention = message.author.mention
+    category = None
+    options = []
 
-    if has_card_kw:
-        card_replies = [
-            f"Ingin memiliki Kartu Identitas resmi **AMBANIMESQD**? Lengkapi formulir perkenalanmu di {intro_mention}, dan kartumu akan langsung terbit di {ktp_mention}.",
-            f"Kartu Identitas dicetak secara otomatis setelah registrasi selesai. Silakan menuju {intro_mention} untuk mengisi data diri, lalu cek hasil kartumu di {ktp_mention}.",
-            f"Untuk mendapatkan Kartu Identitas beserta role resmimu, cukup isi formulir singkat di {intro_mention}. Setelahnya, kartumu dapat langsung dilihat di {ktp_mention}."
+    if re.search(r"\b(libur|liburan)\b", content, re.IGNORECASE):
+        category = "libur"
+        options = [
+            f"Wah, lagi libur nih, {mention}? Kalau sedang punya waktu luang, jangan lupa mampir mengobrol atau gabung di voice channel **AMBANIMESQD** ya—suasananya selalu lebih seru kalau santai bareng.",
+            f"Asyik nih yang sedang libur, {mention}. Setelah puas rehat dari rutinitas, jangan lupa sempatkan mampir ke chat atau nongkrong di voice **AMBANIMESQD**—siapa tahu bisa sekalian ngobrol santai bareng teman-teman di sini.",
+            f"Selamat menikmati hari liburnya, {mention}! Kalau lagi santai dan bingung mau melakukan apa, ruang obrolan dan voice **AMBANIMESQD** selalu terbuka buat menemani waktu luangmu.",
+            f"Wah, nikmatnya waktu libur ya, {mention}. Nanti kalau sedang senggang, jangan lupa singgah buat ngobrol atau ikut meramaikan voice di **AMBANIMESQD**—pasti makin seru kalau ada kamu di sana."
         ]
-        reply_text = pick_reply("card", card_replies)
-    else:
-        intro_replies = [
-            f"Bagi anggota yang belum memperkenalkan diri, silakan lengkapi formulir registrasi di {intro_mention}. Kartu Identitas pribadimu akan otomatis diterbitkan di {ktp_mention}.",
-            f"Proses perkenalan resmi **AMBANIMESQD** tersedia di {intro_mention}. Begitu selesai, Kartu Identitas dan role milikmu akan langsung aktif serta tampil di {ktp_mention}.",
-            f"Silakan luangkan waktu sejenak untuk mengisi formulir perkenalan di {intro_mention} agar akses penuh dan Kartu Identitasmu segera terbit di {ktp_mention}."
+    elif re.search(r"\bpagi+\b", content, re.IGNORECASE):
+        category = "pagi"
+        options = [
+            f"Selamat pagi, {mention}. Semoga harimu dimulai dengan tenang dan penuh energi baik—jangan lupa sarapan sebelum mulai beraktivitas ya.",
+            f"Pagi, {mention}. Semoga semua urusan dan rencanamu hari ini dimudahkan dari awal hingga selesai. Semangat menjalani hari!",
+            f"Selamat pagi, {mention}. Pagi yang tenang selalu cocok untuk memulai hari dengan baik—kalau ada waktu luang, mampir mengobrol santai di sini ya."
         ]
-        reply_text = pick_reply("intro", intro_replies)
+    elif re.search(r"\bsiang+\b", content, re.IGNORECASE):
+        category = "siang"
+        options = [
+            f"Selamat siang, {mention}. Di tengah padatnya aktivitas, jangan lupa menyempatkan waktu sejenak untuk istirahat dan makan siang ya.",
+            f"Siang, {mention}. Bagaimana harimu sejauh ini? Kalau butuh jeda sebentar biar pikiran kembali segar, ruang obrolan **AMBANIMESQD** selalu siap menemani.",
+            f"Selamat siang, {mention}. Tetap jaga stamina dan jangan lupa minum air yang cukup supaya tetap fokus sampai sore nanti."
+        ]
+    elif re.search(r"\bsore+\b", content, re.IGNORECASE):
+        category = "sore"
+        options = [
+            f"Selamat sore, {mention}. Semoga semua kesibukan hari ini berjalan lancar dan lelahmu perlahan terbayar menjelang senja.",
+            f"Sore, {mention}. Waktunya mulai melambat sejenak dari rutinitas—kalau sedang santai, yuk ikut mengobrol ringan bareng warga **AMBANIMESQD**.",
+            f"Selamat sore, {mention}. Semoga sisa harimu terasa lebih ringan dan menyenangkan. Jangan lupa istirahat setelah selesai beraktivitas ya."
+        ]
+    elif re.search(r"\b(malam+|malem+)\b", content, re.IGNORECASE):
+        category = "malam"
+        options = [
+            f"Selamat malam, {mention}. Terima kasih sudah menjalani hari ini dengan baik. Kalau belum mengantuk, mari mengobrol santai dulu di sini sebelum beristirahat.",
+            f"Malam, {mention}. Suasana malam memang paling pas untuk melepas penat—kalau sedang luang, silakan mampir ke chat atau sekadar bersantai di **AMBANIMESQD**.",
+            f"Selamat malam, {mention}. Semoga malammu tenang dan nyaman. Jangan terlalu larut begadang, dan jaga kesehatan ya."
+        ]
+    elif re.search(r"\b(h+a+l+o+|al+o+|hi+|hy+|hlo+|hola+)\b", content, re.IGNORECASE):
+        category = "sapa"
+        options = [
+            f"Halo {mention}, senang melihatmu hadir hari ini. Semoga harimu berjalan lancar—kalau sedang santai, silakan ikut meramaikan obrolan di sini ya.",
+            f"Halo {mention}, selamat datang kembali di ruang obrolan. Ada cerita menarik atau topik ringan yang ingin dibagikan hari ini?",
+            f"Halo {mention}, semoga kabarmu selalu baik. Silakan duduk santai dan nikmati suasana hangat di **AMBANIMESQD** hari ini.",
+            f"Halo {mention}, terima kasih sudah menyapa. Semoga harimu menyenangkan—jangan ragu untuk ikut mengobrol bersama teman-teman di sini."
+        ]
 
-    embed = discord.Embed(description=reply_text, color=0xD4AF37)
-    await message.reply(embed=embed, mention_author=False)
+    if not category:
+        return
+
+    # Terapkan jeda ringan untuk non-admin agar obrolan tetap nyaman dan tidak spam
+    is_admin = isinstance(message.author, discord.Member) and message.author.guild_permissions.administrator
+    now = time.time()
+    cd_key = (message.author.id, category)
+
+    if not is_admin:
+        last_time = chat_reply_cooldowns.get(cd_key, 0)
+        if now - last_time < CHAT_REPLY_COOLDOWN:
+            return
+    chat_reply_cooldowns[cd_key] = now
+
+    reply_text = pick_reply(category, options)
+    await message.reply(reply_text, mention_author=False)
 
 
 # Perintah Admin: Memasang panel tombol intro (ketik !setup_intro di channel intro)
