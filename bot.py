@@ -46,13 +46,11 @@ def detect_gender(text: str):
         "he", "him", "bro", "mas", "bang", "kang", "pangeran", "raja"
     }
 
-    # Cek kecocokan per kata dulu (aman dari bentrok seperti "male" di dalam "female")
     if words & female_exact:
         return "female"
     if words & male_exact:
         return "male"
 
-    # Cadangan jika penulisan disambung tanpa spasi (misal: "cowokganteng" / "cewekcantik")
     female_sub = ["wanita", "perempuan", "cewek", "cewe", "female", "woman", "girl", "wedok", "awewe", "akhwat"]
     male_sub = ["pria", "laki", "cowok", "cowo", "lanang", "lalaki", "ikhwan", "jantan"]
 
@@ -64,7 +62,35 @@ def detect_gender(text: str):
     return None
 
 
-# 3. Setup Database SQLite untuk menyimpan data intro & nomor urut member
+# 3. Pisahkan baris Anime & Hobi dari Biodata Intro secara otomatis
+def parse_intro_fields(biodata: str):
+    anime_hobby_lines = []
+    bio_lines = []
+
+    anime_hobby_pattern = re.compile(
+        r"^[\-\•\*\s]*(anime|fav(?:orit|orite)?\s*anime|hobi|hobby|hobbies|manga)\b",
+        re.IGNORECASE
+    )
+    bio_prefix_pattern = re.compile(
+        r"^[\-\•\*\s]*(?:bio|biodata(?:\s*intro)?)\s*[:\-]\s*",
+        re.IGNORECASE
+    )
+
+    for raw_line in biodata.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if anime_hobby_pattern.match(line):
+            anime_hobby_lines.append(line)
+        else:
+            cleaned_bio = bio_prefix_pattern.sub("", line).strip()
+            if cleaned_bio:
+                bio_lines.append(cleaned_bio)
+
+    return anime_hobby_lines, bio_lines
+
+
+# 4. Setup Database SQLite untuk menyimpan data intro & nomor urut member
 def init_db():
     conn = sqlite3.connect("database.db")
     c = conn.cursor()
@@ -121,7 +147,7 @@ def get_member_data(user_id):
     return row
 
 
-# 4. Bersihkan emoji dari nama role & ubah font unik nama member jadi huruf normal
+# 5. Bersihkan emoji dari nama role & ubah font unik nama member jadi huruf normal
 def clean_role_name(name: str) -> str:
     cleaned = re.sub(r"[^\x20-\x7E]+", "", name)
     cleaned = cleaned.replace("•", "").strip(" -•|")
@@ -134,7 +160,7 @@ def clean_display_name(name: str, fallback: str) -> str:
     return cleaned[:16] if cleaned else fallback[:16]
 
 
-# 5. Gambar kapsul (pill badge) role secara otomatis
+# 6. Gambar kapsul (pill badge) role secara otomatis
 def draw_role_pills(draw, roles, start_x, start_y, max_x, font):
     x, y = start_x, start_y
     pad_x, pad_y = 14, 7
@@ -166,7 +192,7 @@ def draw_role_pills(draw, roles, start_x, start_y, max_x, font):
         x += pill_w + gap_x
 
 
-# 6. Render gambar ID Card AMBANIMESQD
+# 7. Render gambar ID Card AMBANIMESQD
 async def generate_id_card(member: discord.Member, data: tuple) -> io.BytesIO:
     member_number, asal, gender, umur_zodiak, waifu_husbu, biodata = data
 
@@ -178,6 +204,7 @@ async def generate_id_card(member: discord.Member, data: tuple) -> io.BytesIO:
     font_id = ImageFont.truetype("assets/Poppins-Regular.ttf", 17)
     font_val = ImageFont.truetype("assets/Poppins-Bold.ttf", 20)
     font_bio = ImageFont.truetype("assets/Poppins-Regular.ttf", 19)
+    font_anime = ImageFont.truetype("assets/Poppins-Regular.ttf", 17)
     font_pill = ImageFont.truetype("assets/Poppins-Bold.ttf", 15)
 
     ivory = (244, 239, 230, 255)
@@ -204,24 +231,41 @@ async def generate_id_card(member: discord.Member, data: tuple) -> io.BytesIO:
     draw.text((90, 565), joined_str, font=font_val, fill=ivory)
     draw.text((90, 620), gender[:18], font=font_val, fill=ivory)
 
-    # --- D. Pisahkan & Render Role Kartu vs Anime & Hobby ---
+    # --- D. Pisahkan teks Anime & Hobi vs Biodata Intro ---
+    anime_hobby_lines, bio_lines = parse_intro_fields(biodata)
+
+    # --- E. Kotak Role Kartu (kiri) & Kotak Anime & Hobby (kanan) ---
     role_kartu = [r for r in reversed(member.roles) if any(k in r.name.upper() for k in KARTU_KEYWORDS)]
     role_anime = [r for r in reversed(member.roles) if any(k in r.name.upper() for k in ANIME_KEYWORDS)]
 
     draw_role_pills(draw, role_kartu, start_x=444, start_y=236, max_x=790, font=font_pill)
-    draw_role_pills(draw, role_anime, start_x=852, start_y=236, max_x=1198, font=font_pill)
 
-    # --- E. Kotak Biodata Intro ---
-    wrapped_lines = []
-    for paragraph in biodata.splitlines():
-        wrapped_lines.extend(textwrap.wrap(paragraph, width=54) or [""])
+    if anime_hobby_lines:
+        wrapped_ah = []
+        for paragraph in anime_hobby_lines:
+            wrapped_ah.extend(textwrap.wrap(paragraph, width=32) or [""])
 
-    bio_y = 396
-    for line in wrapped_lines[:3]:
-        draw.text((444, bio_y), line, font=font_bio, fill=ivory)
-        bio_y += 28
+        ah_y = 234
+        for line in wrapped_ah[:3]:
+            draw.text((852, ah_y), line, font=font_anime, fill=ivory)
+            ah_y += 24
+    else:
+        draw_role_pills(draw, role_anime, start_x=852, start_y=236, max_x=1198, font=font_pill)
 
-    # --- F. 3 Kotak Bawah (Umur/Zodiak, Waifu/Husbu, Nomor Member) ---
+    # --- F. Kotak Biodata Intro ---
+    if bio_lines:
+        wrapped_bio = []
+        for paragraph in bio_lines:
+            wrapped_bio.extend(textwrap.wrap(paragraph, width=54) or [""])
+
+        bio_y = 396
+        for line in wrapped_bio[:3]:
+            draw.text((444, bio_y), line, font=font_bio, fill=ivory)
+            bio_y += 28
+    else:
+        draw.text((444, 396), "Member resmi AMBANIMESQD.", font=font_bio, fill=soft_gray)
+
+    # --- G. 3 Kotak Bawah (Umur/Zodiak, Waifu/Husbu, Nomor Member) ---
     draw.text((444, 576), umur_zodiak[:18], font=font_val, fill=ivory)
     draw.text((715, 576), waifu_husbu[:18], font=font_val, fill=ivory)
     draw.text((986, 576), f"Member #{member_number:03d}", font=font_val, fill=ivory)
@@ -232,17 +276,21 @@ async def generate_id_card(member: discord.Member, data: tuple) -> io.BytesIO:
     return output
 
 
-# 7. Formulir Pop-up (Modal) Intro
+# 8. Formulir Pop-up (Modal) Intro
 class IntroModal(discord.ui.Modal, title="Formulir Intro AMBANIMESQD"):
     asal = discord.ui.TextInput(label="Asal / Domisili", placeholder="Contoh: Jawa Tengah / Jakarta", max_length=25)
     gender = discord.ui.TextInput(label="Gender", placeholder="Contoh: Pria / Wanita / Cowok / Cewek", max_length=20)
     umur_zodiak = discord.ui.TextInput(label="Umur / Zodiak", placeholder="Contoh: 20 • Scorpio", max_length=20)
     waifu_husbu = discord.ui.TextInput(label="Waifu / Husbu", placeholder="Contoh: Frieren / Gojo", max_length=20)
     biodata = discord.ui.TextInput(
-        label="Biodata Intro (Anime Favorit & Hobi)",
+        label="Anime Favorit, Hobi & Biodata",
         style=discord.TextStyle.paragraph,
-        placeholder="Contoh:\nAnime Favorit: Attack on Titan & Frieren\nHobi: Gaming, Nonton Anime",
-        max_length=160
+        placeholder=(
+            "Anime Favorit: Attack on Titan\n"
+            "Hobi: Gaming, Nonton Anime\n"
+            "Bio: Salam kenal semuanya!"
+        ),
+        max_length=220
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -327,7 +375,7 @@ class IntroModal(discord.ui.Modal, title="Formulir Intro AMBANIMESQD"):
             await interaction.followup.send("ID Card berhasil dibuat!", file=file, ephemeral=True)
 
 
-# 8. Tombol Permanen (tetap aktif meski bot restart)
+# 9. Tombol Permanen (tetap aktif meski bot restart)
 class IntroButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -342,7 +390,7 @@ class IntroButtonView(discord.ui.View):
         await interaction.response.send_modal(IntroModal())
 
 
-# 9. Inisialisasi Bot
+# 10. Inisialisasi Bot
 class AmbanimesqdBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
