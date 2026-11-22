@@ -428,16 +428,27 @@ class IntroButtonView(discord.ui.View):
         await interaction.response.send_modal(IntroModal())
 
 
-# 10. Inisialisasi Bot
+# 10. Inisialisasi Bot (Status Activity Permanen + Load Cog Surat)
 class AmbanimesqdBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True
-        super().__init__(command_prefix="!", intents=intents)
+
+        # Status activity permanen (tidak akan hilang / don't clear selama bot online)
+        activity = discord.CustomActivity(name="🪪 /ktp • ✉️ /surat | AMBANIMESQD")
+
+        super().__init__(
+            command_prefix="!",
+            intents=intents,
+            status=discord.Status.online,
+            activity=activity
+        )
 
     async def setup_hook(self):
         self.add_view(IntroButtonView())
+        await self.load_extension("cogs.surat")
+        print("Cog cogs.surat berhasil dimuat!")
         await self.tree.sync()
 
     async def on_ready(self):
