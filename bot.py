@@ -160,36 +160,66 @@ def clean_display_name(name: str, fallback: str) -> str:
     return cleaned[:16] if cleaned else fallback[:16]
 
 
-# 6. Gambar kapsul (pill badge) role secara otomatis
-def draw_role_pills(draw, roles, start_x, start_y, max_x, font):
-    x, y = start_x, start_y
-    pad_x, pad_y = 14, 7
-    gap_x, gap_y = 10, 10
+# 6. Gambar kapsul (pill badge) role dengan posisi teks & baris yang presisi
+def draw_role_pills(draw, roles, start_x, start_y, max_x, font, box_height=76):
+    pad_x = 16
+    pill_h = 30
+    gap_x = 12
+    gap_y = 10
 
-    for role in roles[:4]:
+    # Kelompokkan kapsul ke dalam baris terlebih dahulu agar bisa diratakan vertikal
+    rows = []
+    current_row = []
+    current_x = start_x
+
+    for role in roles[:6]:
         label = clean_role_name(role.name)
         bbox = draw.textbbox((0, 0), label, font=font)
         text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
         pill_w = text_w + (pad_x * 2)
-        pill_h = text_h + (pad_y * 2)
 
-        if x + pill_w > max_x:
-            x = start_x
-            y += pill_h + gap_y
+        if current_row and (current_x + pill_w > max_x):
+            rows.append(current_row)
+            current_row = []
+            current_x = start_x
 
-        rgb = role.color.to_rgb()
-        fill_color = rgb if rgb != (0, 0, 0) else (120, 28, 28)
+        current_row.append((role, label, bbox, pill_w))
+        current_x += pill_w + gap_x
 
-        draw.rounded_rectangle(
-            [x, y, x + pill_w, y + pill_h],
-            radius=pill_h // 2,
-            fill=(*fill_color, 215),
-            outline=(212, 175, 55, 255),
-            width=1
-        )
-        draw.text((x + pad_x, y + pad_y - 2), label, font=font, fill=(248, 244, 236, 255))
-        x += pill_w + gap_x
+    if current_row:
+        rows.append(current_row)
+
+    if not rows:
+        return
+
+    # Maksimal 2 baris agar rapi di dalam kotak
+    rows = rows[:2]
+    total_h = (len(rows) * pill_h) + ((len(rows) - 1) * gap_y)
+    y = start_y + max(0, (box_height - total_h) // 2)
+
+    for row in rows:
+        x = start_x
+        for role, label, bbox, pill_w in row:
+            rgb = role.color.to_rgb()
+            fill_color = rgb if rgb != (0, 0, 0) else (120, 28, 28)
+
+            draw.rounded_rectangle(
+                [x, y, x + pill_w, y + pill_h],
+                radius=pill_h // 2,
+                fill=(*fill_color, 215),
+                outline=(212, 175, 55, 255),
+                width=1
+            )
+
+            # Hitung pusat presisi kapsul dan sesuaikan terhadap bounding box huruf
+            cx = x + (pill_w / 2)
+            cy = y + (pill_h / 2)
+            text_x = round(cx - ((bbox[0] + bbox[2]) / 2))
+            text_y = round(cy - ((bbox[1] + bbox[3]) / 2))
+
+            draw.text((text_x, text_y), label, font=font, fill=(248, 244, 236, 255))
+            x += pill_w + gap_x
+        y += pill_h + gap_y
 
 
 # 7. Render gambar ID Card AMBANIMESQD
@@ -238,7 +268,7 @@ async def generate_id_card(member: discord.Member, data: tuple) -> io.BytesIO:
     role_kartu = [r for r in reversed(member.roles) if any(k in r.name.upper() for k in KARTU_KEYWORDS)]
     role_anime = [r for r in reversed(member.roles) if any(k in r.name.upper() for k in ANIME_KEYWORDS)]
 
-    draw_role_pills(draw, role_kartu, start_x=444, start_y=236, max_x=790, font=font_pill)
+    draw_role_pills(draw, role_kartu, start_x=444, start_y=230, max_x=790, font=font_pill, box_height=76)
 
     if anime_hobby_lines:
         wrapped_ah = []
@@ -250,7 +280,7 @@ async def generate_id_card(member: discord.Member, data: tuple) -> io.BytesIO:
             draw.text((852, ah_y), line, font=font_anime, fill=ivory)
             ah_y += 24
     else:
-        draw_role_pills(draw, role_anime, start_x=852, start_y=236, max_x=1198, font=font_pill)
+        draw_role_pills(draw, role_anime, start_x=852, start_y=230, max_x=1198, font=font_pill, box_height=76)
 
     # --- F. Kotak Biodata Intro ---
     if bio_lines:
