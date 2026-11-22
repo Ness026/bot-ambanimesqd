@@ -167,7 +167,6 @@ def draw_role_pills(draw, roles, start_x, start_y, max_x, font, box_height=76):
     gap_x = 12
     gap_y = 10
 
-    # Kelompokkan kapsul ke dalam baris terlebih dahulu agar bisa diratakan vertikal
     rows = []
     current_row = []
     current_x = start_x
@@ -192,7 +191,6 @@ def draw_role_pills(draw, roles, start_x, start_y, max_x, font, box_height=76):
     if not rows:
         return
 
-    # Maksimal 2 baris agar rapi di dalam kotak
     rows = rows[:2]
     total_h = (len(rows) * pill_h) + ((len(rows) - 1) * gap_y)
     y = start_y + max(0, (box_height - total_h) // 2)
@@ -211,7 +209,6 @@ def draw_role_pills(draw, roles, start_x, start_y, max_x, font, box_height=76):
                 width=1
             )
 
-            # Hitung pusat presisi kapsul dan sesuaikan terhadap bounding box huruf
             cx = x + (pill_w / 2)
             cy = y + (pill_h / 2)
             text_x = round(cx - ((bbox[0] + bbox[2]) / 2))
@@ -447,6 +444,30 @@ async def on_member_join(member: discord.Member):
         await intro_ch.send(
             f"Selamat datang {member.mention} di **AMBANIMESQD**! "
             f"Silakan baca rules lalu klik tombol **Isi Intro & Buat ID Card** di channel ini untuk membuka akses server."
+        )
+
+
+# Event: Arahkan otomatis jika ada yang mengetik kata "intro", "kartu", atau "card" di channel mana pun
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot or not message.guild:
+        return
+
+    await bot.process_commands(message)
+
+    if message.content.startswith("!"):
+        return
+
+    if re.search(r"\b(intro|kartu|card)\b", message.content, re.IGNORECASE):
+        intro_ch = message.guild.get_channel(INTRO_CHANNEL_ID)
+        ktp_ch = message.guild.get_channel(KTP_CHANNEL_ID)
+
+        intro_mention = intro_ch.mention if intro_ch else "#intro"
+        ktp_mention = ktp_ch.mention if ktp_ch else "#id-card"
+
+        await message.reply(
+            f"Silakan isi intro di channel {intro_mention} & cek ID Card pribadi dari hasil intro di channel {ktp_mention}.",
+            mention_author=False
         )
 
 
