@@ -17,8 +17,10 @@ from PIL import Image, ImageDraw, ImageFont
 # 1. Muat konfigurasi dari file .env
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
-INTRO_CHANNEL_ID = int(os.getenv("INTRO_CHANNEL_ID", "0").strip() or "0")
-KTP_CHANNEL_ID = int(os.getenv("KTP_CHANNEL_ID", "0").strip() or "0")
+PUBLIC_CHAT_ID = int(os.getenv("PUBLIC_CHAT_ID", "1484499488688181248").strip() or "1484499488688181248")
+RULES_CHANNEL_ID = int(os.getenv("RULES_CHANNEL_ID", "1346324015370735657").strip() or "1346324015370735657")
+INTRO_CHANNEL_ID = int(os.getenv("INTRO_CHANNEL_ID", "1573754933163982849").strip() or "1573754933163982849")
+KTP_CHANNEL_ID = int(os.getenv("KTP_CHANNEL_ID", "1573755063372091433").strip() or "1573755063372091433")
 MEMBER_ROLE_ID = int(os.getenv("MEMBER_ROLE_ID", "0").strip() or "0")
 MALE_ROLE_ID = int(os.getenv("MALE_ROLE_ID", "0").strip() or "0")
 FEMALE_ROLE_ID = int(os.getenv("FEMALE_ROLE_ID", "0").strip() or "0")
@@ -29,7 +31,7 @@ SURAT_CHANNEL_ID = int(os.getenv("SURAT_CHANNEL_ID", "0").strip() or "0")
 # Channel yang dilewati oleh auto-reply sapaan santai agar tetap bersih
 CASUAL_IGNORED_CHANNELS = {
     ch_id for ch_id in (
-        INTRO_CHANNEL_ID, KTP_CHANNEL_ID,
+        RULES_CHANNEL_ID, INTRO_CHANNEL_ID, KTP_CHANNEL_ID,
         LETTER_LOG_CHANNEL_ID, POSTBOX_CHANNEL_ID, SURAT_CHANNEL_ID
     ) if ch_id
 }
@@ -44,6 +46,7 @@ ANIME_KEYWORDS = [
 
 # Pencatat indeks terakhir agar balasan otomatis tidak berulang berturut-turut
 last_reply_index = {
+    "welcome": -1,
     "card": -1,
     "intro": -1,
     "sapa": -1,
@@ -483,15 +486,52 @@ class AmbanimesqdBot(commands.Bot):
 bot = AmbanimesqdBot()
 
 
-# Event: Sapa otomatis saat member baru join
+# Event: Sapa otomatis saat member baru join di channel public-chat
 @bot.event
 async def on_member_join(member: discord.Member):
+    if member.bot:
+        return
+
+    public_ch = member.guild.get_channel(PUBLIC_CHAT_ID)
+    if not public_ch:
+        return
+
+    rules_ch = member.guild.get_channel(RULES_CHANNEL_ID)
     intro_ch = member.guild.get_channel(INTRO_CHANNEL_ID)
-    if intro_ch:
-        await intro_ch.send(
-            f"Selamat datang {member.mention} di **AMBANIMESQD**! "
-            f"Silakan baca rules lalu klik tombol **Isi Intro & Buat ID Card** di channel ini untuk membuka akses server."
+    ktp_ch = member.guild.get_channel(KTP_CHANNEL_ID)
+
+    rules_mention = rules_ch.mention if rules_ch else "#rules"
+    intro_mention = intro_ch.mention if intro_ch else "#intro"
+    ktp_mention = ktp_ch.mention if ktp_ch else "#id-card"
+
+    welcomes = [
+        (
+            f"Selamat datang di **AMBANIMESQD**, {member.mention}. Senang melihat wajah baru singgah di sini. "
+            f"Sebelum ikut larut dalam obrolan, sempatkan sejenak membaca panduan singkat di {rules_mention}, "
+            f"lalu mampir ke {intro_mention} untuk memperkenalkan diri sekaligus menerbitkan Kartu Identitas resmimu. "
+            f"Begitu selesai, kartumu bisa langsung dilihat di {ktp_mention}. Semoga betah di sini!"
+        ),
+        (
+            f"Halo {member.mention}, selamat bergabung bersama **AMBANIMESQD**. Agar semuanya terasa nyaman, "
+            f"silakan luangkan waktu sebentar untuk menengok {rules_mention}, kemudian lengkapi formulir perkenalan di {intro_mention}. "
+            f"Setelah itu, Kartu Identitas pribadimu akan otomatis terbit dan dapat langsung kamu cek di {ktp_mention}. "
+            f"Jangan sungkan untuk ikut mengobrol di sini, ya."
+        ),
+        (
+            f"Satu lagi tamu baru tiba di ruang obrolan—selamat datang, {member.mention}! Sebagai langkah awal di **AMBANIMESQD**, "
+            f"silakan simak aturan main kita di {rules_mention} dan isi formulir perkenalan di {intro_mention} untuk mencetak Kartu Identitas resmimu. "
+            f"Hasil kartunya nanti langsung tersedia di {ktp_mention}. Selamat menikmati suasana di sini!"
+        ),
+        (
+            f"Selamat datang, {member.mention}, terima kasih sudah bergabung dengan **AMBANIMESQD**. Biar makin akrab, "
+            f"yuk baca sebentar ketentuan di {rules_mention}, lalu lanjutkan dengan mengisi perkenalan di {intro_mention}. "
+            f"Kartu Identitas resmimu akan otomatis dibuat dan bisa langsung dicek di {ktp_mention}. "
+            f"Silakan santai dan bergabung di obrolan!"
         )
+    ]
+
+    welcome_text = pick_reply("welcome", welcomes)
+    await public_ch.send(welcome_text)
 
 
 # Event: Auto-reply fitur intro/kartu (Embed) + sapaan ramah & waktu/libur (teks reply biasa)
