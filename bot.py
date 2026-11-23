@@ -1,3 +1,4 @@
+import asyncio
 import io
 import os
 import random
@@ -44,6 +45,11 @@ ANIME_KEYWORDS = [
     "SUPRANATURAL", "SUPERNATURAL", "MISTERY", "MYSTERY"
 ]
 
+# Pengaturan kualitas & ukuran akhir ID Card (ringan & cepat muat di mobile)
+RESAMPLE_LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
+CARD_OUTPUT_SIZE = (960, 540)
+_CARD_ASSETS = None
+
 # Pencatat indeks terakhir agar balasan otomatis tidak berulang berturut-turut
 last_reply_index = {
     "welcome": -1,
@@ -67,6 +73,28 @@ def pick_reply(category: str, options: list[str]) -> str:
     idx = random.choice(available) if available else 0
     last_reply_index[category] = idx
     return options[idx]
+
+
+def get_card_assets():
+    """Muat template, mask avatar, dan font sekali saja ke RAM agar render super cepat."""
+    global _CARD_ASSETS
+    if _CARD_ASSETS is None:
+        template = Image.open("assets/template.jpeg").convert("RGBA").resize((1280, 720), RESAMPLE_LANCZOS)
+        avatar_mask = Image.new("L", (152, 152), 0)
+        ImageDraw.Draw(avatar_mask).ellipse((0, 0, 152, 152), fill=255)
+
+        _CARD_ASSETS = {
+            "template": template,
+            "avatar_mask": avatar_mask,
+            "font_name": ImageFont.truetype("assets/Poppins-Bold.ttf", 30),
+            "font_user": ImageFont.truetype("assets/Poppins-Regular.ttf", 20),
+            "font_id": ImageFont.truetype("assets/Poppins-Regular.ttf", 19),
+            "font_val": ImageFont.truetype("assets/Poppins-Bold.ttf", 22),
+            "font_bio": ImageFont.truetype("assets/Poppins-Regular.ttf", 22),
+            "font_anime": ImageFont.truetype("assets/Poppins-Regular.ttf", 20),
+            "font_pill": ImageFont.truetype("assets/Poppins-Bold.ttf", 16),
+        }
+    return _CARD_ASSETS
 
 
 # 2. Deteksi otomatis berbagai variasi penulisan gender
@@ -196,13 +224,13 @@ def clean_role_name(name: str) -> str:
 def clean_display_name(name: str, fallback: str) -> str:
     normalized = unicodedata.normalize("NFKD", name)
     cleaned = "".join(ch for ch in normalized if 32 <= ord(ch) <= 126).strip()
-    return cleaned[:16] if cleaned else fallback[:16]
+    return cleaned[:15] if cleaned else fallback[:15]
 
 
 # 6. Gambar kapsul (pill badge) role dengan posisi teks & baris yang presisi
-def draw_role_pills(draw, roles, start_x, start_y, max_x, font, box_height=76):
+def draw_role_pills(draw, role_items, start_x, start_y, max_x, font, box_height=78):
     pad_x = 16
-    pill_h = 30
+    pill_h = 32
     gap_x = 12
     gap_y = 10
 
@@ -210,8 +238,7 @@ def draw_role_pills(draw, roles, start_x, start_y, max_x, font, box_height=76):
     current_row = []
     current_x = start_x
 
-    for role in roles[:6]:
-        label = clean_role_name(role.name)
+    for label, rgb in role_items[:6]:
         bbox = draw.textbbox((0, 0), label, font=font)
         text_w = bbox[2] - bbox[0]
         pill_w = text_w + (pad_x * 2)
@@ -221,7 +248,7 @@ def draw_role_pills(draw, roles, start_x, start_y, max_x, font, box_height=76):
             current_row = []
             current_x = start_x
 
-        current_row.append((role, label, bbox, pill_w))
+        current_row.append((label, rgb, bbox, pill_w))
         current_x += pill_w + gap_x
 
     if current_row:
@@ -236,14 +263,13 @@ def draw_role_pills(draw, roles, start_x, start_y, max_x, font, box_height=76):
 
     for row in rows:
         x = start_x
-        for role, label, bbox, pill_w in row:
-            rgb = role.color.to_rgb()
+        for label, rgb, bbox, pill_w in row:
             fill_color = rgb if rgb != (0, 0, 0) else (120, 28, 28)
 
             draw.rounded_rectangle(
                 [x, y, x + pill_w, y + pill_h],
                 radius=pill_h // 2,
-                fill=(*fill_color, 215),
+                fill=(*fill_color, 225),
                 outline=(212, 175, 55, 255),
                 width=1
             )
@@ -253,93 +279,124 @@ def draw_role_pills(draw, roles, start_x, start_y, max_x, font, box_height=76):
             text_x = round(cx - ((bbox[0] + bbox[2]) / 2))
             text_y = round(cy - ((bbox[1] + bbox[3]) / 2))
 
-            draw.text((text_x, text_y), label, font=font, fill=(248, 244, 236, 255))
+            draw.text((text_x, text_y), label, font=font, fill=(250, 246, 238, 255))
             x += pill_w + gap_x
         y += pill_h + gap_y
 
 
-# 7. Render gambar ID Card AMBANIMESQD
-async def generate_id_card(member: discord.Member, data: tuple) -> io.BytesIO:
+# 7. Render gambar ID Card AMBANIMESQD (Cepat, Ringan, & Teks Jelas di Mobile)
+def _render_id_card_sync(
+    member_id: int,
+    display_name: str,
+    username: str,
+    joined_str: str,
+    avatar_bytes: bytes,
+    role_kartu_items: list[tuple[str, tuple[int, int, int]]],
+    role_anime_items: list[tuple[str, tuple[int, int, int]]],
+    data: tuple
+) -> io.BytesIO:
     member_number, asal, gender, umur_zodiak, waifu_husbu, biodata = data
+    assets = get_card_assets()
 
-    base = Image.open("assets/template.jpeg").convert("RGBA").resize((1280, 720))
+    base = assets["template"].copy()
     draw = ImageDraw.Draw(base, "RGBA")
 
-    font_name = ImageFont.truetype("assets/Poppins-Bold.ttf", 28)
-    font_user = ImageFont.truetype("assets/Poppins-Regular.ttf", 18)
-    font_id = ImageFont.truetype("assets/Poppins-Regular.ttf", 17)
-    font_val = ImageFont.truetype("assets/Poppins-Bold.ttf", 20)
-    font_bio = ImageFont.truetype("assets/Poppins-Regular.ttf", 19)
-    font_anime = ImageFont.truetype("assets/Poppins-Regular.ttf", 17)
-    font_pill = ImageFont.truetype("assets/Poppins-Bold.ttf", 15)
-
-    ivory = (244, 239, 230, 255)
-    soft_gray = (195, 188, 178, 255)
+    ivory = (248, 244, 236, 255)
+    soft_gray = (218, 211, 200, 255)
 
     # --- A. Foto Profil (Avatar) Bulat di Dalam Bingkai Cermin ---
-    avatar_bytes = await member.display_avatar.with_size(256).read()
-    avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((152, 152))
-
-    mask = Image.new("L", (152, 152), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, 152, 152), fill=255)
-    base.paste(avatar, (152, 222), mask)
+    avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((152, 152), RESAMPLE_LANCZOS)
+    base.paste(avatar, (152, 222), assets["avatar_mask"])
 
     # --- B. ID Discord di Kiri Atas ---
-    draw.text((352, 102), str(member.id), font=font_id, fill=soft_gray)
+    draw.text((352, 100), str(member_id), font=assets["font_id"], fill=soft_gray)
 
     # --- C. Panel Kiri (Nama, Username, Asal, Member Sejak, Gender) ---
-    display_name = clean_display_name(member.display_name, member.name)
-    draw.text((228, 428), display_name, font=font_name, fill=ivory, anchor="mm")
-    draw.text((228, 458), f"@{member.name}", font=font_user, fill=soft_gray, anchor="mm")
+    draw.text((228, 426), display_name, font=assets["font_name"], fill=ivory, anchor="mm")
+    draw.text((228, 458), f"@{username}"[:22], font=assets["font_user"], fill=soft_gray, anchor="mm")
 
-    joined_str = member.joined_at.strftime("%d %b %Y") if member.joined_at else datetime.now().strftime("%d %b %Y")
-    draw.text((90, 510), asal[:20], font=font_val, fill=ivory)
-    draw.text((90, 565), joined_str, font=font_val, fill=ivory)
-    draw.text((90, 620), gender[:18], font=font_val, fill=ivory)
+    draw.text((90, 509), asal[:18], font=assets["font_val"], fill=ivory)
+    draw.text((90, 564), joined_str, font=assets["font_val"], fill=ivory)
+    draw.text((90, 619), gender[:16], font=assets["font_val"], fill=ivory)
 
     # --- D. Pisahkan teks Anime & Hobi vs Biodata Intro ---
     anime_hobby_lines, bio_lines = parse_intro_fields(biodata)
 
     # --- E. Kotak Role Kartu (kiri) & Kotak Anime & Hobby (kanan) ---
-    role_kartu = [r for r in reversed(member.roles) if any(k in r.name.upper() for k in KARTU_KEYWORDS)]
-    role_anime = [r for r in reversed(member.roles) if any(k in r.name.upper() for k in ANIME_KEYWORDS)]
-
-    draw_role_pills(draw, role_kartu, start_x=444, start_y=230, max_x=790, font=font_pill, box_height=76)
+    draw_role_pills(draw, role_kartu_items, start_x=444, start_y=229, max_x=790, font=assets["font_pill"], box_height=78)
 
     if anime_hobby_lines:
         wrapped_ah = []
         for paragraph in anime_hobby_lines:
-            wrapped_ah.extend(textwrap.wrap(paragraph, width=32) or [""])
+            wrapped_ah.extend(textwrap.wrap(paragraph, width=28) or [""])
 
-        ah_y = 234
+        ah_y = 230
         for line in wrapped_ah[:3]:
-            draw.text((852, ah_y), line, font=font_anime, fill=ivory)
-            ah_y += 24
+            draw.text((852, ah_y), line, font=assets["font_anime"], fill=ivory)
+            ah_y += 26
     else:
-        draw_role_pills(draw, role_anime, start_x=852, start_y=230, max_x=1198, font=font_pill, box_height=76)
+        draw_role_pills(draw, role_anime_items, start_x=852, start_y=229, max_x=1198, font=assets["font_pill"], box_height=78)
 
     # --- F. Kotak Biodata Intro ---
     if bio_lines:
         wrapped_bio = []
         for paragraph in bio_lines:
-            wrapped_bio.extend(textwrap.wrap(paragraph, width=54) or [""])
+            wrapped_bio.extend(textwrap.wrap(paragraph, width=48) or [""])
 
-        bio_y = 396
+        bio_y = 394
         for line in wrapped_bio[:3]:
-            draw.text((444, bio_y), line, font=font_bio, fill=ivory)
-            bio_y += 28
+            draw.text((444, bio_y), line, font=assets["font_bio"], fill=ivory)
+            bio_y += 30
     else:
-        draw.text((444, 396), "Member resmi AMBANIMESQD.", font=font_bio, fill=soft_gray)
+        draw.text((444, 394), "Member resmi AMBANIMESQD.", font=assets["font_bio"], fill=soft_gray)
 
     # --- G. 3 Kotak Bawah (Umur/Zodiak, Waifu/Husbu, Nomor Member) ---
-    draw.text((444, 576), umur_zodiak[:18], font=font_val, fill=ivory)
-    draw.text((715, 576), waifu_husbu[:18], font=font_val, fill=ivory)
-    draw.text((986, 576), f"Member #{member_number:03d}", font=font_val, fill=ivory)
+    draw.text((444, 575), umur_zodiak[:16], font=assets["font_val"], fill=ivory)
+    draw.text((715, 575), waifu_husbu[:16], font=assets["font_val"], fill=ivory)
+    draw.text((986, 575), f"Member #{member_number:03d}", font=assets["font_val"], fill=ivory)
 
+    # --- H. Perkecil halus ke 960x540 & simpan JPEG tajam (~100 KB) ---
+    final_img = base.resize(CARD_OUTPUT_SIZE, RESAMPLE_LANCZOS).convert("RGB")
     output = io.BytesIO()
-    base.save(output, format="PNG")
+    final_img.save(
+        output,
+        format="JPEG",
+        quality=88,
+        subsampling=0,
+        optimize=True,
+        progressive=True
+    )
     output.seek(0)
     return output
+
+
+async def generate_id_card(member: discord.Member, data: tuple) -> io.BytesIO:
+    avatar_bytes = await member.display_avatar.replace(size=256, format="png").read()
+    display_name = clean_display_name(member.display_name, member.name)
+    joined_str = member.joined_at.strftime("%d %b %Y") if member.joined_at else datetime.now().strftime("%d %b %Y")
+
+    role_kartu_items = [
+        (clean_role_name(r.name), r.color.to_rgb())
+        for r in reversed(member.roles)
+        if any(k in r.name.upper() for k in KARTU_KEYWORDS)
+    ]
+    role_anime_items = [
+        (clean_role_name(r.name), r.color.to_rgb())
+        for r in reversed(member.roles)
+        if any(k in r.name.upper() for k in ANIME_KEYWORDS)
+    ]
+
+    return await asyncio.to_thread(
+        _render_id_card_sync,
+        member.id,
+        display_name,
+        member.name,
+        joined_str,
+        avatar_bytes,
+        role_kartu_items,
+        role_anime_items,
+        data
+    )
 
 
 # 8. Formulir Pop-up (Modal) Intro
@@ -393,11 +450,14 @@ class IntroModal(discord.ui.Modal, title="Formulir Intro AMBANIMESQD"):
                 roles_to_remove.append(male_role)
 
         # Terapkan perubahan role ke member
+        roles_changed = False
         try:
             if roles_to_add:
                 await member.add_roles(*roles_to_add, reason="Selesai mengisi intro")
+                roles_changed = True
             if roles_to_remove:
                 await member.remove_roles(*roles_to_remove, reason="Update gender intro")
+                roles_changed = True
         except discord.Forbidden:
             print(
                 f"PERINGATAN: Bot gagal mengatur role untuk {member.display_name}. "
@@ -406,11 +466,12 @@ class IntroModal(discord.ui.Modal, title="Formulir Intro AMBANIMESQD"):
         except Exception as e:
             print(f"Error saat mengatur role: {e}")
 
-        # Ambil data member terbaru dari Discord agar role yang baru masuk langsung tampil di kartu pertama
-        try:
-            member = await interaction.guild.fetch_member(member.id)
-        except Exception:
-            pass
+        # Hanya fetch ulang member jika role benar-benar berubah agar lebih cepat
+        if roles_changed:
+            try:
+                member = await interaction.guild.fetch_member(member.id)
+            except Exception:
+                pass
 
         # Simpan data ke database
         member_number = save_member_data(
@@ -422,7 +483,7 @@ class IntroModal(discord.ui.Modal, title="Formulir Intro AMBANIMESQD"):
         data = (member_number, self.asal.value, self.gender.value,
                 self.umur_zodiak.value, self.waifu_husbu.value, self.biodata.value)
         card_buffer = await generate_id_card(member, data)
-        file = discord.File(fp=card_buffer, filename=f"ktp_{member.id}.png")
+        file = discord.File(fp=card_buffer, filename=f"ktp_{member.id}.jpg")
 
         role_text = ", ".join(f"**{r}**" for r in role_info) if role_info else "member"
 
@@ -683,7 +744,7 @@ async def ktp_command(interaction: discord.Interaction, member: discord.Member =
 
     await interaction.response.defer()
     card_buffer = await generate_id_card(target, data)
-    file = discord.File(fp=card_buffer, filename=f"ktp_{target.id}.png")
+    file = discord.File(fp=card_buffer, filename=f"ktp_{target.id}.jpg")
     await interaction.followup.send(
         content=f"🪪 **KARTU IDENTITAS AMBANIMESQD — {target.display_name}**",
         file=file
@@ -695,4 +756,8 @@ if __name__ == "__main__":
         print("ERROR: Token belum diisi di file .env!")
     else:
         init_db()
+        try:
+            get_card_assets()
+        except Exception as e:
+            print(f"Peringatan preload aset ID Card: {e}")
         bot.run(TOKEN)
